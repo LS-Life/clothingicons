@@ -1,0 +1,75 @@
+name: PNG → WebP
+
+# Triggert nur auf neue/geänderte PNGs in shots/. Der Action-Commit
+# committet .webp-Files — das matcht den paths-Filter NICHT, also
+# keine Endlos-Schleife.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'shots/**/*.png'
+
+# Nur ein Run gleichzeitig, damit Commits sich nicht gegenseitig überfahren.
+concurrency:
+  group: png-to-webp
+  cancel-in-progress: false
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Install cwebp
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq webp
+
+      - name: Find changed PNGs
+        id: changed
+        shell: bash
+        run: |
+          set -e
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            git diff --name-only --diff-filter=AM HEAD^ HEAD -- 'shots/**/*.png' > changed.txt || true
+          else
+            find shots -type f -name '*.png' > changed.txt
+          fi
+          count=$(wc -l < changed.txt | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Found $count changed PNG(s)"
+
+      - name: Convert to webp
+        if: steps.changed.outputs.count != '0'
+        shell: bash
+        run: |
+          set -e
+          while IFS= read -r png; do
+            [ -z "$png" ] && continue
+            [ ! -f "$png" ] && continue
+            webp="${png%.png}.webp"
+            # -q 82 = gute Balance, -mt = multithread, -quiet = weniger Output.
+            # Für Bilder mit Transparenz (unsere Chroma-Key-Extraktion):
+            # -alpha_q 100 erhält die Alpha-Qualität verlustfrei.
+            cwebp -q 82 -mt -alpha_q 100 -quiet "$png" -o "$webp"
+          done < changed.txt
+          echo "Conversion done: $(find shots -type f -name '*.webp' | wc -l) webp file(s) total"
+
+      - name: Commit webp files
+        if: steps.changed.outputs.count != '0'
+        shell: bash
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 'shots/**/*.webp'
+          if git diff --cached --quiet; then
+            echo "No webp changes to commit."
+            exit 0
+          fi
+          count=$(git diff --cached --name-only | wc -l | tr -d ' ')
+          git commit -m "webp: auto-convert ${count} file(s)"
+          git push
