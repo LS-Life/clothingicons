@@ -8,6 +8,9 @@ on:
     branches: [main]
     paths:
       - 'shots/**/*.png'
+  # Manueller Trigger für Backfill: konvertiert ALLE PNGs die noch keine
+  # .webp-Nachbardatei haben. Nützlich nach großem Initial-Push.
+  workflow_dispatch:
 
 # Nur ein Run gleichzeitig, damit Commits sich nicht gegenseitig überfahren.
 concurrency:
@@ -33,7 +36,15 @@ jobs:
         shell: bash
         run: |
           set -e
-          if git rev-parse HEAD^ >/dev/null 2>&1; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Backfill-Mode: alle PNGs die noch kein .webp haben
+            : > changed.txt
+            while IFS= read -r png; do
+              [ -z "$png" ] && continue
+              webp="${png%.png}.webp"
+              [ ! -f "$webp" ] && echo "$png" >> changed.txt
+            done < <(find shots -type f -name '*.png')
+          elif git rev-parse HEAD^ >/dev/null 2>&1; then
             git diff --name-only --diff-filter=AM HEAD^ HEAD -- 'shots/**/*.png' > changed.txt || true
           else
             find shots -type f -name '*.png' > changed.txt
